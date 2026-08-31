@@ -5128,6 +5128,15 @@ static bool llm_load_tensors(
         defer_expert_mmap = false;
     }
 
+    bool defer_ple_mmap = ml.should_defer_ple_mmaps();
+    if (defer_ple_mmap && use_mlock && ml.use_mmap) {
+        LLAMA_LOG_WARN("%s: deferred per-layer token embedding disabled because mlock keeps mmap ranges resident\n", __func__);
+        defer_ple_mmap = false;
+    }
+    if (ml.defer_ple && !ml.use_mmap && !ml.mmap_ple && !ml.ple_tensor_index.empty()) {
+        LLAMA_LOG_WARN("%s: --defer-ple had no effect: creating the tensors disabled mmap\n", __func__);
+    }
+
     ml.done_getting_tensors();
 
     if (ml.mmap_ple) {
@@ -5138,7 +5147,29 @@ static bool llm_load_tensors(
     }
 
     // --dry-run skips MAP_POPULATE/WILLNEED — tensor data is never read.
-    ml.init_mappings(!defer_expert_mmap && !dry_run, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+    ml.init_mappings(!defer_expert_mmap && !defer_ple_mmap && !dry_run, use_mlock ? &model.mlock_mmaps : nullptr, ml.use_thp);
+
+    // A failed dedicated PLE mapping falls back to an owned buffer.
+    if (defer_ple_mmap && !ml.should_defer_ple_mmaps()) {
+        defer_ple_mmap = false;
+    }
+
+    // dropping a range discards an anonymous huge-page mapping, so test the mapping and not the -thp flag
+    if (ml.has_anonymous_mapping()) {
+        if (defer_expert_mmap) {
+            LLAMA_LOG_WARN("%s: deferred expert loading disabled because the model is mapped on huge pages\n", __func__);
+            defer_expert_mmap = false;
+        }
+        if (defer_ple_mmap) {
+            LLAMA_LOG_WARN("%s: deferred per-layer token embedding disabled because the model is mapped on huge pages\n", __func__);
+            defer_ple_mmap = false;
+        }
+    }
+    if (defer_ple_mmap && !dry_run) {
+        LLAMA_LOG_INFO("%s: deferring %.2f GiB of per-layer token embedding to the file\n", __func__,
+                ml.ple_tensor_index.deferred_bytes / 1024.0 / 1024.0 / 1024.0);
+    }
+
     model.mappings.reserve(ml.mappings.size());
 
     // create the backend buffers
@@ -5318,6 +5349,10 @@ static bool llm_load_tensors(
             ml.drop_mmap_expert_pages();
         }
 
+        if (defer_ple_mmap) {
+            ml.apply_ple_mmap_policy();
+        }
+
         if (model.arch == LLM_ARCH_QWEN4EXP && model.tok_embd_per_layer != nullptr) {
             GGML_ASSERT(model.tok_embd_per_layer->buffer != nullptr);
             model.ple_numa_buf = model.tok_embd_per_layer->buffer;
@@ -5457,6 +5492,8 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
 
         model.mtp = params.mtp;
 
+        ml.defer_ple = params.defer_ple;
+
         try {
             llm_load_arch(ml, model);
         } catch(const std::exception & e) {
@@ -5491,6 +5528,20 @@ static int llama_model_load(const std::string & fname, llama_model & model, llam
             ml.build_expert_tensor_index(model.hparams);
 #else
             LLAMA_LOG_WARN("%s: deferred expert loading is only supported on Linux; ignoring defer_experts\n", __func__);
+#endif
+        }
+        if (params.defer_ple) {
+#ifdef __linux__
+            if (!params.use_mmap && !ml.mmap_ple) {
+                LLAMA_LOG_WARN("%s: --defer-ple had no effect: mmap is disabled\n", __func__);
+            } else {
+                ml.build_ple_tensor_index();
+                if (ml.ple_tensor_index.empty()) {
+                    LLAMA_LOG_WARN("%s: --defer-ple had no effect: no per-layer token embedding\n", __func__);
+                }
+            }
+#else
+            LLAMA_LOG_WARN("%s: deferred per-layer token embedding is only supported on Linux; ignoring defer_ple\n", __func__);
 #endif
         }
         try {
@@ -8741,6 +8792,7 @@ struct llama_model_params llama_model_default_params() {
         /*.dry_run                     =*/ false,
         /*.flash_attn                  =*/ true,
         /*.defer_experts               =*/ false,
+        /*.defer_ple                   =*/ false,
         /*.swa_compress                =*/ false,
     };
 

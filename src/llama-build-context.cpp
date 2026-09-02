@@ -1123,7 +1123,7 @@ ggml_tensor * llm_build_context::do_split_norm(ggml_context * ctx, ggml_tensor *
 
 static bool llm_uses_deepseek4_swiglu_limits(const llama_model & model) {
     return model.arch == LLM_ARCH_DEEPSEEK4 ||
-            (model.arch == LLM_ARCH_DFLASH_DRAFT && model.hparams.dsv4_hc_mult > 0);
+            (llm_arch_is_dflash_family(model.arch) && model.hparams.dsv4_hc_mult > 0);
 }
 
 static ggml_tensor * llm_do_split_post_norm(ggml_context * ctx, ggml_tensor * cur, post_norm_data * pnd, int id, int n_device, const char * tag, int il_cb, const llm_build_cb & cb) {
@@ -2900,6 +2900,7 @@ ggml_cgraph * llm_build_context::llama_build_graph(
             {
                 result = llm.build_gemma4_mtp();
             } break;
+        case LLM_ARCH_DFLASH:
         case LLM_ARCH_DFLASH2:
         case LLM_ARCH_DFLASH_DRAFT:
             {

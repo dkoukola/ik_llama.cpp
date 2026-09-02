@@ -4471,7 +4471,11 @@ static std::pair<std::vector<double>, double> get_layer_sizes(const llama_model_
                 (model.arch == LLM_ARCH_DFLASH2 &&
                 (name == "fc.weight" ||
                  name == "selector_predecessor.weight" || name == "selector_successor.weight" ||
-                 name == "selector_hidden.weight" || name == "enc.output_norm.weight"))) {
+                 name == "selector_hidden.weight" || name == "enc.output_norm.weight")) ||
+                (model.arch == LLM_ARCH_DFLASH &&
+                (name == "fc.weight" || name == "enc.output_norm.weight")) ||
+                name == "markov_w1.weight" || name == "markov_w2.weight" ||
+                name == "conf_proj.weight" || name == "conf_proj.bias") {
             output_misc_size += size;
             continue;
         }
@@ -7319,7 +7323,9 @@ static int llama_decode_internal(
     n_outputs_embd = has_mtp && cparams.mtp_op_type == MTP_OP_NONE ? n_tokens_all : n_outputs;
     const size_t required_outputs = std::max<size_t>(n_outputs, n_outputs_embd);
     const bool is_dflash_decode = llm_arch_is_dflash_family(lctx.model.arch);
-    const bool is_dspark_decode = lctx.model.arch == LLM_ARCH_DFLASH_DRAFT &&
+    const bool is_dspark_decode =
+            (lctx.model.arch == LLM_ARCH_DFLASH_DRAFT ||
+             lctx.model.arch == LLM_ARCH_DFLASH) &&
             lctx.model.dflash_markov_w1 != nullptr;
     const size_t reserved_outputs = llama_output_reserve(lctx, required_outputs);
     if (reserved_outputs < required_outputs) {
@@ -10822,6 +10828,7 @@ enum llama_rope_type llama_rope_type(const struct llama_model * model) {
         case LLM_ARCH_MUSE_GLIMMER:
             return LLAMA_ROPE_TYPE_NORM;
 
+        case LLM_ARCH_DFLASH:
         case LLM_ARCH_DFLASH_DRAFT:
             return model->hparams.dsv4_hc_mult > 0
                     ? LLAMA_ROPE_TYPE_NORM

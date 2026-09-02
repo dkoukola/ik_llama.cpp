@@ -659,7 +659,7 @@ struct llama_model {
     }
 
     float swiglu_limit(uint32_t il, bool shared) const {
-        const bool is_dsv4_draft = arch == LLM_ARCH_DFLASH_DRAFT && hparams.dsv4_hc_mult > 0;
+        const bool is_dsv4_draft = llm_arch_is_dflash_family(arch) && hparams.dsv4_hc_mult > 0;
         if (arch != LLM_ARCH_STEP35 && arch != LLM_ARCH_BAILINGMOE3 && arch != LLM_ARCH_DEEPSEEK4 &&
                 !is_dsv4_draft) {
             return 0.0f;

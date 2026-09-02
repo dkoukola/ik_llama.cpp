@@ -87,6 +87,7 @@ static const std::map<llm_arch, const char *> LLM_ARCH_NAMES = {
     { LLM_ARCH_MISTRAL4,        "mistral4"     },
     { LLM_ARCH_GEMMA4,          "gemma4"       },
     { LLM_ARCH_GEMMA4_MTP,      "gemma4_mtp"   },
+    { LLM_ARCH_DFLASH,          "dflash"       },
     { LLM_ARCH_DFLASH2,         "dflash"       },
     { LLM_ARCH_DFLASH_DRAFT,    "dflash-draft" },
     { LLM_ARCH_GEMMA4_ASSISTANT,"gemma4-assistant"   },
@@ -346,7 +347,7 @@ bool llm_arch_is_hybrid(const llm_arch & arch) {
 }
 
 bool llm_arch_is_dflash_family(const llm_arch & arch) {
-    return arch == LLM_ARCH_DFLASH2 || arch == LLM_ARCH_DFLASH_DRAFT;
+    return arch == LLM_ARCH_DFLASH || arch == LLM_ARCH_DFLASH2 || arch == LLM_ARCH_DFLASH_DRAFT;
 }
 
 bool llm_arch_requires_all_graph_output_rows(const llm_arch & arch) {

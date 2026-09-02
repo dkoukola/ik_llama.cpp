@@ -200,8 +200,7 @@ static bool common_speculative_are_compatible(
 
 static bool common_speculative_target_has_appended_mtp_contract(const llama_model * model) {
     return llama_model_is_step35(model) || llama_model_is_deepseek4(model) ||
-           llama_model_is_qwen35_family(model) ||
-           (model != nullptr && std::strcmp(llama_model_arch_string(model), "qwen4exp") == 0);
+           llama_model_is_qwen35_family(model) || llama_model_is_qwen4exp(model);
 }
 
 static bool common_speculative_has_recognized_mtp_companion(
@@ -214,8 +213,13 @@ static bool common_speculative_has_recognized_mtp_companion(
         return llama_model_arch_string(target) != nullptr &&
                std::strcmp(llama_model_arch_string(target), "gemma4") == 0;
     }
-    return common_speculative_target_has_appended_mtp_contract(target) &&
-           llama_model_mtp_package(companion) == LLAMA_MTP_PACKAGE_COMPANION;
+    if (llama_model_mtp_package(companion) != LLAMA_MTP_PACKAGE_COMPANION) {
+        return false;
+    }
+    if (llama_model_is_qwen4exp(target) || llama_model_is_qwen4exp(companion)) {
+        return llama_model_is_qwen4exp(target) && llama_model_is_qwen4exp(companion);
+    }
+    return common_speculative_target_has_appended_mtp_contract(target);
 }
 
 // state of an implementation of speculative decoding
@@ -2439,14 +2443,15 @@ bool common_speculative_finalize_startup(
                             __func__, n_heads);
                     return false;
                 }
-            } else if (std::strcmp(llama_model_arch_string(model), "qwen4exp") == 0) {
-                if (std::strcmp(llama_model_arch_string(companion), "qwen4exp") != 0) {
-                    LOG_ERR("%s: Qwen3.8 MTP requires a qwen4exp companion\n", __func__);
+            } else if (llama_model_is_qwen4exp(model)) {
+                if (!llama_model_is_qwen4exp(companion)) {
+                    LOG_ERR("%s: Qwen4Exp MTP requires a Qwen4Exp companion\n", __func__);
                     return false;
                 }
+
                 const int32_t n_heads = llama_model_n_nextn_layer(companion);
                 if (n_heads != 1) {
-                    LOG_ERR("%s: Qwen3.8 MTP companion requires exactly one predictor layer, got %d\n",
+                    LOG_ERR("%s: Qwen4Exp MTP companion requires exactly one predictor layer, got %d\n",
                             __func__, n_heads);
                     return false;
                 }

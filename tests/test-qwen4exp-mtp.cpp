@@ -5,6 +5,8 @@
 #endif
 
 #include "llama-context.h"
+#include "llama-model.h"
+#include "llama-model-loader.h"
 #include "llama-spec-features.h"
 #include "llama-spec-features-dflash.h"
 
@@ -97,6 +99,58 @@ static model_ptr load_model(const char * path, bool mtp) {
     params.mtp = mtp;
     params.use_mmap = false;
     return model_ptr(llama_model_load_from_file(path, params), llama_free_model);
+}
+
+static void test_metadata(const char * path) {
+    llama_model_loader loader(path, 0, false, false, false, false,
+            false, false, false, nullptr, nullptr);
+    loader.mappings.resize(3);
+    CHECK(!loader.has_anonymous_mapping());
+    if (llama_mmap::SUPPORTED) {
+        loader.defer_ple = true;
+        loader.mmap_ple = true;
+        const auto * ple = loader.get_weight("per_layer_token_embd.weight");
+        CHECK(ple != nullptr);
+        loader.mmap_ple_file = ple->idx;
+        loader.build_ple_tensor_index();
+        CHECK(loader.should_defer_ple_mmaps());
+        llama_mlocks locks;
+        loader.init_mappings(false, &locks, false);
+        CHECK(locks.empty()); // dedicated NUMA PLE mappings are not locked
+        CHECK(loader.mappings.at(ple->idx) != nullptr);
+        CHECK(!loader.has_anonymous_mapping());
+        loader.apply_ple_mmap_policy();
+    }
+    const uint32_t ratios[] = { 0, 2, 2 };
+    for (int n_ratios : { 3, 2 }) {
+        gguf_set_arr_data(loader.meta, "qwen4exp.attention.compress_ratios",
+                GGUF_TYPE_UINT32, ratios, n_ratios);
+        for (bool mtp : { false, true }) {
+            llama_model model;
+            model.arch = LLM_ARCH_QWEN4EXP;
+            model.mtp = mtp;
+            llm_load_hparams(loader, model);
+            CHECK(model.hparams.n_embd_out == 512);
+            CHECK(model.hparams.dsv4_compress_ratios[0] == 0);
+            CHECK(model.hparams.dsv4_compress_ratios[1] == 2);
+            CHECK(model.hparams.dsv4_compress_ratios[2] == 2);
+            CHECK(model.hparams.is_qsa(2));
+            CHECK(model.hparams.n_layer_kv_from_start == (mtp ? 3 : 2));
+        }
+    }
+
+    for (uint32_t n_nextn : { 3u, 4u }) {
+        gguf_set_val_u32(loader.meta, "qwen4exp.nextn_predict_layers", n_nextn);
+        llama_model model;
+        model.arch = LLM_ARCH_QWEN4EXP;
+        bool rejected = false;
+        try {
+            llm_load_hparams(loader, model);
+        } catch (const std::runtime_error &) {
+            rejected = true;
+        }
+        CHECK(rejected);
+    }
 }
 
 static context_ptr make_context(
@@ -1011,6 +1065,8 @@ int main(int argc, char ** argv) {
     }
     llama_backend_init();
 
+    test_metadata(model_path);
+
     for (const char * rejected_path : rejected_paths) {
         CHECK(load_model(rejected_path, true) == nullptr);
     }
@@ -1024,8 +1080,25 @@ int main(int argc, char ** argv) {
         context_ptr plain = make_plain_context(target_only.get());
         CHECK(plain != nullptr);
         decode_one(plain.get(), 3, 0);
-        CHECK(copy_logits(plain.get(), llama_n_vocab(target_only.get())).size() ==
+        const auto expected_logits = copy_logits(plain.get(), llama_n_vocab(target_only.get()));
+        CHECK(expected_logits.size() ==
                 (size_t) llama_n_vocab(target_only.get()));
+
+#ifdef __linux__
+        llama_model_params mmap_params = llama_model_default_params();
+        mmap_params.use_mmap = true;
+        mmap_params.defer_ple = true;
+        model_ptr mapped(llama_model_load_from_file(model_path, mmap_params), llama_free_model);
+        CHECK(mapped != nullptr);
+        context_ptr mapped_ctx = make_plain_context(mapped.get());
+        CHECK(mapped_ctx != nullptr);
+        decode_one(mapped_ctx.get(), 3, 0);
+        const auto mapped_logits = copy_logits(mapped_ctx.get(), llama_n_vocab(mapped.get()));
+        CHECK(mapped_logits.size() == expected_logits.size());
+        for (size_t i = 0; i < expected_logits.size(); ++i) {
+            CHECK(std::fabs(mapped_logits[i] - expected_logits[i]) < 1e-5f);
+        }
+#endif
 
         context_ptr embedding = make_plain_context(target_only.get(), true);
         CHECK(embedding != nullptr);
